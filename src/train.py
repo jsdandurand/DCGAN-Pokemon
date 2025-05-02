@@ -24,16 +24,17 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def train_step_gan(batch, model, optimizer):
     """
-    Performs a step of batch update using the original GAN objective.
+    Performs a step of batch update using the original GAN objective with conditional generation.
     """
     
     loss_fn = nn.BCEWithLogitsLoss()
 
     batch_size = len(batch["train_X"])
+    labels = batch["train_y"]
 
     # Update discriminator
     noise = batch["noise"]
-    fake_images = model.generate(noise)
+    fake_images = model.generate(noise, labels)  # Pass labels for conditional generation
     real_images = batch["train_X"]
 
     all_images = torch.cat((fake_images.detach(), real_images), dim=0)
@@ -59,6 +60,7 @@ def train_step_gan(batch, model, optimizer):
         "discriminator_loss": disc_loss.detach().cpu().item(),
         "generator_loss": gen_loss.detach().cpu().item(),
         "fake_images": fake_images.detach().cpu().numpy(),
+        "labels": labels.detach().cpu().numpy(),  # Save labels for visualization
     }
 
     # Compute gradient norm
@@ -90,15 +92,14 @@ def compute_gradient_penalty(model, real_images, fake_images, eps):
     eps = eps.expand_as(real_images)
     gp_loss = None
 
-    # ========================================================
-    # TODO: Compute gradient penalty
+
     x_hat = eps * real_images + (1 - eps) * fake_images
     x_hat.requires_grad = True
     preds = model.discriminate(x_hat)
     grads = autograd.grad(outputs=preds, inputs=x_hat, grad_outputs=torch.ones_like(preds), create_graph=True, retain_graph=True, only_inputs=True)[0]
     gp_loss = ((grads.norm(2, dim=1) - 1) ** 2).mean()
 
-    # ========================================================
+
     
     return gp_loss
 
@@ -109,10 +110,11 @@ def train_step_wgan(batch, model, optimizer, gp):
     """
 
     batch_size = len(batch["train_X"])
+    labels = batch["train_y"]
 
     # Update discriminator/critic
     noise = batch["noise"]
-    fake_images = model.generate(noise)
+    fake_images = model.generate(noise, labels)  # Pass labels for conditional generation
     real_images = batch["train_X"]
 
     all_images = torch.cat((fake_images.detach(), real_images), dim=0)
@@ -123,13 +125,7 @@ def train_step_wgan(batch, model, optimizer, gp):
     disc_loss = None
     gen_loss = None
 
-    # ========================================================
-    # TODO: Compute discriminator/critic loss
-
     disc_loss = -(preds[batch_size:].mean() - preds[:batch_size].mean())  # Negate to minimize
-    # preds = 1 means real, 0 means fake
-
-    # ========================================================
 
     eps = batch["eps"]
     gp_loss = compute_gradient_penalty(model, real_images, fake_images.detach(), eps)
@@ -140,13 +136,8 @@ def train_step_wgan(batch, model, optimizer, gp):
     # Update generator
     preds = model.discriminate(fake_images)
     optimizer["generator"].zero_grad()
-
-    # ========================================================
-    # TODO: Compute generator loss
     
     gen_loss = -preds[:batch_size].mean()  # Negate to maximize
-    
-    # ========================================================
 
     gen_loss.backward()
     optimizer["generator"].step()
@@ -156,6 +147,7 @@ def train_step_wgan(batch, model, optimizer, gp):
         "generator_loss": gen_loss.detach().cpu().item(),
         "gp_loss": gp_loss.detach().cpu().item(),
         "fake_images": fake_images.detach().cpu().numpy(),
+        "labels": labels.detach().cpu().numpy(),  # Save labels for visualization
     }
 
     # Compute gradient norm
@@ -241,9 +233,11 @@ def train(dataset, model, optimizer, args, run_name):
             for image_i in range(num_axes):
                 if image_i < num_images:
                     image = step_info["fake_images"][image_i]
+                    label = step_info["labels"][image_i]
                     axes[image_i].set_xticklabels([])
                     axes[image_i].set_yticklabels([])
                     axes[image_i].imshow(image.transpose((1, 2, 0)))
+                    axes[image_i].set_title(f'Label: {label}')
                 else:
                     axes[image_i].axis("off")
 
