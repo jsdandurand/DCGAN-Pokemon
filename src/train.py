@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
+from tqdm import tqdm
 
 from functools import partial
 from torch import autograd
@@ -174,13 +175,11 @@ def train(train_loader, model, optimizer, args, run_name):
     """
     Runs the training loop.
     """
-
     # Make sure to split the same way
     gen = torch.Generator()
     gen.manual_seed(SPLIT_SEED)
 
     batch_size = 64
-
     loader = iter(train_loader)
 
     gp = getattr(args, "gradient_penalty", None)
@@ -188,8 +187,11 @@ def train(train_loader, model, optimizer, args, run_name):
 
     logs = dict()
     step_infos = dict()
-    tic = timeit.default_timer()
-    for iter_i in range(args.num_iterations):
+    
+    # Create progress bar
+    pbar = tqdm(range(args.num_iterations), desc="Training")
+    
+    for iter_i in pbar:
         try:
             res = next(loader)
             train_X = res["image"]
@@ -199,6 +201,7 @@ def train(train_loader, model, optimizer, args, run_name):
             res = next(loader)
             train_X = res["image"]
             train_y = res["type"]
+            
         real_batch_size = train_X.shape[0]
         step_info = train_step(
             {
@@ -210,22 +213,26 @@ def train(train_loader, model, optimizer, args, run_name):
             model,
             optimizer,
         )
+        
         for k, v in step_info.items():
             step_infos.setdefault(k, [])
             step_infos[k].append(v)
 
+        # Update progress bar with losses
+        if 'discriminator_loss' in step_info and 'generator_loss' in step_info:
+            pbar.set_postfix({
+                'D_loss': f"{step_info['discriminator_loss']:.4f}",
+                'G_loss': f"{step_info['generator_loss']:.4f}"
+            })
+
         if (iter_i + 1) % LOG_INTERVAL == 0:
             step_infos = {k: np.mean(v) for k, v in step_infos.items()}
-            toc = timeit.default_timer()
-
-            print("Iteration {} ==========================================".format(iter_i + 1))
-            print("Time taken for training: {:4f}s".format(toc - tic))
+            
             for k, v in step_info.items():
                 if k == "fake_images":
                     continue
                 logs.setdefault(k, [])
                 logs[k].append(v)
-                print("Avg {}: {:4f}".format(k, v))
 
             # Save images sampled
             num_images = len(step_info["fake_images"])
@@ -265,7 +272,6 @@ def train(train_loader, model, optimizer, args, run_name):
                 os.path.join(run_name, "latest.pt")
             )
             step_infos = dict()
-            tic = timeit.default_timer()
 
         pickle.dump(logs, open(os.path.join(run_name, "logs.pkl"), "wb"))
 
