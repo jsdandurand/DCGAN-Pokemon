@@ -12,6 +12,8 @@ import os
 import timeit
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from pathlib import Path
 
 from functools import partial
 from torch import autograd
@@ -22,13 +24,20 @@ SPLIT_SEED = 0
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def denormalize_image(image):
+    """
+    Denormalize images from [-1, 1] range back to [0, 1]
+    Inverse of transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    """
+    return (image + 1) / 2
+
+
 def train_step_gan(batch, model, optimizer):
     """
-    Performs a step of batch update using the original GAN objective with conditional generation.
+    Performs a step of batch update using the GAN objective with Pokemon type conditioning.
     """
-    
     loss_fn = nn.BCEWithLogitsLoss()
-
+    
     batch_size = len(batch["train_X"])
     labels = batch["train_y"]
 
@@ -161,7 +170,7 @@ def train_step_wgan(batch, model, optimizer, gp):
     return step_info
 
 
-def train(dataset, model, optimizer, args, run_name):
+def train(train_loader, model, optimizer, args, run_name):
     """
     Runs the training loop.
     """
@@ -171,12 +180,7 @@ def train(dataset, model, optimizer, args, run_name):
     gen.manual_seed(SPLIT_SEED)
 
     batch_size = 64
-    train_loader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-    )
+
     loader = iter(train_loader)
 
     gp = getattr(args, "gradient_penalty", None)

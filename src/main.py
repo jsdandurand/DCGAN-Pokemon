@@ -20,8 +20,16 @@ import json
 import numpy as np
 import torch
 import uuid
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 from src.train import train
+from vit import ViTGAN
+from pokemon_data import get_pokemon_dataloader, NUM_TYPES, POKEMON_TYPES
+from train import train_step_gan
 
 
 def set_seed(seed=None):
@@ -35,57 +43,47 @@ def set_seed(seed=None):
 def main(args):
     set_seed(args.seed)
 
-    transform = transforms.Compose([
-        transforms.RandomAffine(
-            degrees=0,
-            translate=(0.1, 0.1),
-            scale=(1.0, 1.0),
-        ),
-        transforms.ToTensor(), 
-        transforms.Normalize((0.5,), (0.5,)),
-    ])
+    # Constants
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    BATCH_SIZE = 64
+    NUM_EPOCHS = 100
+    EMBED_DIM = 256
+    IMAGE_SIZE = 64
+    PATCH_SIZE = 8  # 64/8 = 8 patches per side
+    LEARNING_RATE = 2e-4
+    SAVE_DIR = Path(args.save_path)
 
-    dataset = datasets.MNIST(
-        os.path.join(args.save_path, "datasets"),
-        train=True,
-        download=True,
-        transform=transform,
+    # Create save directory
+    SAVE_DIR.mkdir(exist_ok=True)
+    
+    # Get data
+    dataloader = get_pokemon_dataloader(
+        batch_size=BATCH_SIZE,
+        image_size=IMAGE_SIZE
     )
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    if args.model == "MLP":
-        import src.mlp as mlp
-        noise_dim = 100
-        model = mlp.MLPGAN(noise_dim)
-    elif args.model.startswith("ViT"):
-        import src.vit as vit
-        embed_dim = 64
-        model_name = args.model.split(":")
-        if len(model_name) == 1:
-            model_name = "ViT"
-        else:
-            model_name = model_name[1]
-        model = vit.ViTGAN(embed_dim, model_name)
-    else:
-        raise NotImplementedError
-    model.to(device)
-
-    learning_rate_disc = 5e-4
-    learning_rate_gen = 2e-4
-    beta_1 = 0.5
-    beta_2 = 0.999
+    
+    # Initialize model
+    model = ViTGAN(
+        embed_dim=EMBED_DIM,
+        img_size=IMAGE_SIZE,
+        patch_size=PATCH_SIZE,
+        num_classes=NUM_TYPES,
+        discriminator="ViT",
+        attention_type="normal"
+    ).to(DEVICE)
+    
+    # Optimizers
     optimizer = {
-        "discriminator": torch.optim.Adam(
-            model.discriminator.parameters(),
-            lr=learning_rate_disc,
-            betas=(beta_1, beta_2),
-        ),
-        "generator": torch.optim.Adam(
+        "generator": optim.Adam(
             model.generator.parameters(),
-            lr=learning_rate_gen,
-            betas=(beta_1, beta_2),
-        )
+            lr=LEARNING_RATE,
+            betas=(0.5, 0.999)
+        ),
+        "discriminator": optim.Adam(
+            model.discriminator.parameters(),
+            lr=LEARNING_RATE,
+            betas=(0.5, 0.999)
+        ),
     }
 
     if args.load_path and os.path.isfile(args.load_path):
@@ -116,7 +114,7 @@ def main(args):
     )
 
     print("Training...")
-    train(dataset, model, optimizer, args, run_name)
+    train(dataloader, model, optimizer, args, run_name)
 
 
 if __name__ == "__main__":

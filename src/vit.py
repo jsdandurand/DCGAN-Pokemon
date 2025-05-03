@@ -1,79 +1,86 @@
 """
-CSCD84 - Artificial Intelligence, Winter 2025, Assignment 4
-B. Chan
+Vision Transformer GAN implementation with support for conditional generation
+and multiple attention mechanisms.
 """
 
-
-import inspect
-import os
-import sys
-
-currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-parentdir = os.path.dirname(currentdir)
-sys.path.insert(0, parentdir)
-
-from src.mlp import MLPDiscriminator
-
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
-
-IMG_DIM = (1, 28, 28)
-PATCH_SIZE = 7
-assert IMG_DIM[1] % PATCH_SIZE == 0, (
-    "patch size {} should divide the image dimensionality {}".format(
-        PATCH_SIZE, IMG_DIM[1],
-    )
-)
-PATCH_PER_AXIS = IMG_DIM[1] // PATCH_SIZE
-NUM_PATCHES = PATCH_PER_AXIS ** 2
-FLATTENED_IMG_DIM = np.prod(IMG_DIM)
-
+from src.mlp import MLPDiscriminator
 
 class ViTGAN(nn.Module):
-    def __init__(self, embed_dim, discriminator="mlp", attention_type="normal"):
+    def __init__(
+        self,
+        embed_dim,
+        img_size=64,
+        patch_size=8,
+        num_classes=18,  # Number of Pokemon types
+        discriminator="ViT",
+        attention_type="normal"
+    ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = (img_size // patch_size) ** 2
         
-        # Add embedding for class conditioning
-        self.num_classes = 10  # MNIST has 10 classes
-        self.class_embedding = nn.Embedding(self.num_classes, embed_dim)
+        assert img_size % patch_size == 0, "Image size must be divisible by patch size"
+        # Add embedding for type conditioning
+        self.num_classes = num_classes
+        self.class_embedding = nn.Embedding(num_classes, embed_dim)
 
         if discriminator == "MLP":
-            self.discriminator = MLPDiscriminator()
+            self.discriminator = MLPDiscriminator(
+                img_size=img_size,
+                in_channels=3  # RGB images
+            )
         elif discriminator == "ViT":
             self.discriminator = ViTDiscriminator(
                 embed_dim,
-                num_blocks=2,
-                num_heads=4,
+                img_size=img_size,
+                patch_size=patch_size,
+                in_channels=3,  # RGB images
+                num_blocks=4,  # Increased for more complex images
+                num_heads=8,
                 widening_factor=4,
-                attention_type=attention_type,
+                attention_type=attention_type
             )
         else:
             raise NotImplementedError
+            
         self.generator = ViTGenerator(
             embed_dim,
-            num_blocks=2,
-            num_heads=4,
-            widening_factor=2,
-            attention_type=attention_type,
+            img_size=img_size,
+            patch_size=patch_size,
+            out_channels=3,  # RGB images
+            num_blocks=4,  # Increased for more complex images
+            num_heads=8,
+            widening_factor=4,
+            attention_type=attention_type
         )
 
-    def generate(self, noise, labels=None):
-        if labels is not None:
-            # Embed the class labels
-            class_embeddings = self.class_embedding(labels)
-            # Add class embedding to the CLS token
-            noise[:, 0, :] += class_embeddings
-        return self.generator(noise)
-    
-    def discriminate(self, sample):
-        return self.discriminator(sample)
-    
+    def generate(self, noise, labels):
+        """
+        Generate images conditioned on Pokemon type labels
+        Args:
+            noise: Input noise tensor of shape [batch_size, embed_dim]
+            labels: Pokemon type labels tensor of shape [batch_size]
+        Returns:
+            Generated images of shape [batch_size, out_channels, img_size, img_size]
+        """
+        # Get type embeddings
+        type_embed = self.class_embedding(labels)
+        # Combine noise and type embedding
+        combined_input = noise + type_embed
+        return self.generator(combined_input)
+
+    def discriminate(self, x):
+        return self.discriminator(x)
+
     def sample_noise(self, batch_size):
-        return torch.randn(batch_size, NUM_PATCHES + 1, self.embed_dim)
+        return torch.randn(batch_size, self.num_patches + 1, self.embed_dim)
 
 
 class TransformerEncoder(nn.Module):
@@ -134,30 +141,38 @@ class TransformerEncoder(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, embed_dim, num_blocks, num_heads, widening_factor=4, attention_type="normal"):
+    def __init__(
+        self,
+        embed_dim,
+        img_size,
+        patch_size,
+        in_channels,
+        num_blocks,
+        num_heads,
+        widening_factor=4,
+        attention_type="normal"
+    ):
         super().__init__()
-
-        # Here we have one extra token for the [CLS] embedding
-        self.num_tokens = NUM_PATCHES + 1
-
-        # NOTE: We can actually implement this and patchify altogether using a 2D convolution
-        self.linear_proj = nn.Linear(
-            IMG_DIM[0] * PATCH_SIZE ** 2, embed_dim 
-        )
-
-        self.cls_token = nn.Parameter(
-            torch.randn(1, 1, embed_dim)
-        )
-
-        # NOTE: We use learnable encoding here, but one can replace this with
-        # e.g.
-        # - Sinusoidal encoding: https://arxiv.org/pdf/1706.03762
-        # - Rotary encoding: https://arxiv.org/abs/2104.09864
-        # - Many more: https://arxiv.org/pdf/2312.17044v4
-        self.pos_encoding = nn.Parameter(
-            torch.randn(1, self.num_tokens, embed_dim)
-        )
-
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        
+        # Calculate number of patches
+        assert img_size % patch_size == 0, f"Image size {img_size} must be divisible by patch size {patch_size}"
+        self.num_patches = (img_size // patch_size) ** 2
+        self.num_tokens = self.num_patches + 1  # Add CLS token
+        
+        # Patch embedding projection
+        patch_dim = in_channels * patch_size * patch_size
+        self.linear_proj = nn.Linear(patch_dim, embed_dim)
+        
+        # CLS token
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
+        
+        # Positional encoding
+        self.pos_encoding = nn.Parameter(torch.randn(1, self.num_tokens, embed_dim))
+        
+        # Transformer blocks
         self.transformer_blocks = nn.Sequential(*[
             TransformerEncoder(embed_dim, num_heads, widening_factor, attention_type)
             for _ in range(num_blocks)
@@ -165,110 +180,139 @@ class VisionTransformer(nn.Module):
 
     def patchify(self, x):
         """
-        Converts a batch of images into a batch of image patches.
+        Converts a batch of images into a batch of patches.
+        Input: (batch_size, channels, height, width)
+        Output: (batch_size, num_patches, patch_dim)
         """
         B, C, H, W = x.shape
-        x = x.reshape(B, C, H // PATCH_SIZE, PATCH_SIZE, W // PATCH_SIZE, PATCH_SIZE)
-        x = x.permute(0, 2, 4, 1, 3, 5)
-        x = x.flatten(1, 2) 
-
+        assert H == W == self.img_size, f"Input image size ({H}x{W}) doesn't match expected size ({self.img_size}x{self.img_size})"
+        
+        # Reshape into patches
+        x = x.reshape(B, C, H // self.patch_size, self.patch_size, W // self.patch_size, self.patch_size)
+        x = x.permute(0, 2, 4, 1, 3, 5)  # [B, H', W', C, p, p]
+        x = x.flatten(1, 2)  # [B, num_patches, C, p, p]
+        x = x.reshape(B, self.num_patches, -1)  # [B, num_patches, C*p*p]
+        
         return x
 
     def forward(self, x, cls_token=None):
+        """
+        Forward pass of Vision Transformer
+        x: Either image tensor [B, C, H, W] or patch embeddings [B, num_patches, embed_dim]
+        cls_token: Optional pre-computed CLS token
+        """
         batch_size = len(x)
-
+        
         if cls_token is None:
-            x = self.patchify(x)
-            x = x.flatten(2, 4)
-            # NOTE: x is now shaped (batch_size, num_patches, patch_size ** 2)
-
-            cls_token = self.cls_token.repeat(batch_size, 1, 1)
-            tokens = self.linear_proj(x)
-        else:
-            tokens = x
-
-        # ========================================================
-        # TODO: Complete the forward call of ViT
-        # The shapes of relevant variables:
-        # - tokens: (batch_size, num_patches, embed_dim)
-        # - cls_tokens: (batch_size, 1, embed_dim)
-        # Concatenate CLS token with patch tokens
-        tokens = torch.cat([cls_token, tokens], dim=1)
-
+            # If x is image, convert to patches
+            if len(x.shape) == 4:
+                x = self.patchify(x)
+                x = self.linear_proj(x)
+            cls_token = self.cls_token.expand(batch_size, -1, -1)
+            
+        # Concatenate CLS token
+        x = torch.cat([cls_token, x], dim=1)
+        
         # Add positional encoding
-        tokens = tokens + self.pos_encoding
-
+        x = x + self.pos_encoding
+        
         # Pass through transformer blocks
-        tokens = self.transformer_blocks(tokens)
-
-        # ========================================================
-
-        # NOTE: tokens should be shaped (batch_size, num_patches, 1 + patch_size ** 2)
-        #       We will be using these tokens for image generation and classification later.
-        return tokens
+        x = self.transformer_blocks(x)
+        
+        return x
 
 
 class ViTDiscriminator(nn.Module):
-    def __init__(self, embed_dim, num_blocks, num_heads, widening_factor=4, attention_type="normal"):
+    def __init__(
+        self,
+        embed_dim,
+        img_size=64,
+        patch_size=8,
+        in_channels=3,
+        num_blocks=4,
+        num_heads=8,
+        widening_factor=4,
+        attention_type="normal"
+    ):
         super().__init__()
-
         self.vit = VisionTransformer(
-            embed_dim,
-            num_blocks,
-            num_heads,
-            widening_factor,
-            attention_type=attention_type,
+            embed_dim=embed_dim,
+            img_size=img_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            num_blocks=num_blocks,
+            num_heads=num_heads,
+            widening_factor=widening_factor,
+            attention_type=attention_type
         )
-        self.out = nn.Linear(
-            in_features=embed_dim,
-            out_features=1,
-            bias=True,
-        )
+        self.output_proj = nn.Linear(embed_dim, 1)
 
     def forward(self, x):
         """
-        Classifies using only the first token outputted by ViT
+        Classifies using only the CLS token output
         """
         x = self.vit(x)
-        x = x[:, 0]
-        x = self.out(x)
-
+        x = x[:, 0]  # Take CLS token
+        x = self.output_proj(x)
         return x
 
 
 class ViTGenerator(nn.Module):
-    def __init__(self, embed_dim, num_blocks, num_heads, widening_factor=4, attention_type="normal"):
+    def __init__(
+        self,
+        embed_dim,
+        img_size=64,
+        patch_size=8,
+        out_channels=3,
+        num_blocks=4,
+        num_heads=8,
+        widening_factor=4,
+        attention_type="normal"
+    ):
         super().__init__()
-
         self.embed_dim = embed_dim
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.out_channels = out_channels
+        
+        # Calculate number of patches and dimensions
+        self.num_patches = (img_size // patch_size) ** 2
+        self.patch_dim = patch_size * patch_size * out_channels
+        
+        # Project input noise to initial embeddings
+        self.noise_embed = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 2),
+            nn.LeakyReLU(0.2),
+            nn.Linear(embed_dim * 2, embed_dim)
+        )
+        
+        # Vision Transformer for processing
         self.vit = VisionTransformer(
-            embed_dim,
-            num_blocks,
-            num_heads,
-            widening_factor,
-            attention_type=attention_type,
+            embed_dim=embed_dim,
+            img_size=img_size,
+            patch_size=patch_size,
+            in_channels=out_channels,
+            num_blocks=num_blocks,
+            num_heads=num_heads,
+            widening_factor=widening_factor,
+            attention_type=attention_type
         )
-        self.noise_embed = nn.Linear(
-            in_features=embed_dim,
-            out_features=embed_dim,
-        )
-
+        
+        # Progressive output projection
         self.out = nn.Sequential(
-            nn.Linear(
-                in_features=embed_dim,
-                out_features=(IMG_DIM[0] * PATCH_SIZE ** 2) // 2,
-            ),
-            nn.LeakyReLU(),
-            nn.Linear(
-                in_features=(IMG_DIM[0] * PATCH_SIZE ** 2) // 2,
-                out_features=IMG_DIM[0] * PATCH_SIZE ** 2,
-            ),
+            nn.Linear(embed_dim, self.patch_dim // 2),
+            nn.LeakyReLU(0.2),
+            nn.Linear(self.patch_dim // 2, self.patch_dim),
+            nn.Tanh()
         )
 
     def forward(self, z):
         """
-        Generates an image from noise
-        z: (batch_size, embed_dim)
+        Generates images from noise vectors
+        Args:
+            z: Input noise tensor of shape [batch_size, num_patches + 1, embed_dim]
+        Returns:
+            Generated images of shape [batch_size, out_channels, img_size, img_size]
         """
         batch_size = len(z)
 
@@ -276,22 +320,23 @@ class ViTGenerator(nn.Module):
         cls_token = self.noise_embed(z)
 
         tokens = self.vit(cls_token[:, 1:], cls_token[:, :1])
-        tokens = self.out(tokens[:, 1:])
+        tokens = self.out(tokens[:, 1:]) # [B, num_patches, patch_dim]
 
         # Merge image patches back
-        img = tokens.reshape(
+        images = tokens.reshape(
             batch_size,
-            PATCH_PER_AXIS,
-            PATCH_PER_AXIS,
-            IMG_DIM[0],
-            PATCH_SIZE,
-            PATCH_SIZE,
-        ).permute(0, 3, 1, 4, 2, 5).reshape(batch_size, *IMG_DIM)
-
-        # Images are assumed to have range [-1, 1]
-        img = nn.functional.tanh(img)
-
-        return img
+            self.img_size // self.patch_size,  # H patches
+            self.img_size // self.patch_size,  # W patches
+            self.patch_size,                   # patch height
+            self.patch_size,                   # patch width
+            self.out_channels                  # channels
+        )
+        
+        # Rearrange dimensions to standard image format
+        images = images.permute(0, 5, 1, 3, 2, 4).contiguous()
+        images = images.view(batch_size, self.out_channels, self.img_size, self.img_size)
+        
+        return images
 
 
 def interpolate_digits(model, start_digit, end_digit, steps=10):
