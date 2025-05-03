@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: ViTGAN Training",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "args": [
+                "--num_iterations", "40000",
+                "--model", "ViT",
+                "--gradient_penalty", "10",
+                "--save_path", "./logs",
+                "--seed", "42",
+                "--download", "false"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: ViTGAN Load Model",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "args": [
+                "--num_iterations", "40000",
+                "--model", "ViT",
+                "--gradient_penalty", "10",
+                "--save_path", "./logs",
+                "--load_path", "${input:modelPath}",
+                "--seed", "42"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ],
+    "inputs": [
+        {
+            "id": "modelPath",
+            "type": "promptString",
+            "description": "Enter the path to the model checkpoint to load",
+            "default": "./logs/models/your-model-checkpoint.pth"
+        }
+    ]
+} 

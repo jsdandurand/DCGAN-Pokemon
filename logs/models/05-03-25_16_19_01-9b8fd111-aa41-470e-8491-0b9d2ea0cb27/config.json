@@ -1,0 +1,1 @@
+{"num_iterations": 40000, "model": "ViT", "gradient_penalty": 10.0, "save_path": "./logs", "load_path": null, "seed": 42, "download": true}

@@ -73,7 +73,7 @@ class PokemonDataset(Dataset):
         pokemon_data = []
         
         # Get first 151 Pokemon (can be modified to get more)
-        for i in range(1, 152):
+        for i in range(1, 151):
             response = requests.get(f"{pokemon_api}/{i}")
             if response.status_code == 200:
                 data = response.json()
@@ -96,8 +96,8 @@ class PokemonDataset(Dataset):
         with open(self.root_dir / "pokemon.json", "w") as f:
             json.dump(pokemon_data, f)
             
-def get_pokemon_dataloader(batch_size=64, image_size=64, num_workers=2):
-    dataset = PokemonDataset(image_size=image_size)
+def get_pokemon_dataloader(batch_size=64, image_size=64, num_workers=2, download=True):
+    dataset = PokemonDataset(image_size=image_size, download=download)
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -105,3 +105,8 @@ def get_pokemon_dataloader(batch_size=64, image_size=64, num_workers=2):
         num_workers=num_workers,
         pin_memory=True
     ) 
+
+if __name__ == "__main__":
+    # Download the dataset
+    dataset = PokemonDataset(download=True)
+    print(f"Dataset loaded with {len(dataset)} images")

@@ -191,17 +191,21 @@ def train(train_loader, model, optimizer, args, run_name):
     tic = timeit.default_timer()
     for iter_i in range(args.num_iterations):
         try:
-            (train_X, train_y) = next(loader)
+            res = next(loader)
+            train_X = res["image"]
+            train_y = res["type"]
         except StopIteration:
             loader = iter(train_loader)
-            (train_X, train_y) = next(loader)
-
+            res = next(loader)
+            train_X = res["image"]
+            train_y = res["type"]
+        real_batch_size = train_X.shape[0]
         step_info = train_step(
             {
                 "train_X": train_X.to(DEVICE),
                 "train_y": train_y.to(DEVICE),
-                "noise": model.sample_noise(batch_size).to(DEVICE),
-                "eps": torch.rand(batch_size, 1, 1, 1).to(DEVICE),
+                "noise": model.sample_noise(real_batch_size).to(DEVICE),
+                "eps": torch.rand(real_batch_size, 1, 1, 1).to(DEVICE),
             },
             model,
             optimizer,

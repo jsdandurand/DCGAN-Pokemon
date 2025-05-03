@@ -46,7 +46,6 @@ def main(args):
     # Constants
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 64
-    NUM_EPOCHS = 100
     EMBED_DIM = 256
     IMAGE_SIZE = 64
     PATCH_SIZE = 8  # 64/8 = 8 patches per side
@@ -59,7 +58,8 @@ def main(args):
     # Get data
     dataloader = get_pokemon_dataloader(
         batch_size=BATCH_SIZE,
-        image_size=IMAGE_SIZE
+        image_size=IMAGE_SIZE,
+        download=args.download
     )
     
     # Initialize model
@@ -160,6 +160,13 @@ if __name__ == "__main__":
         type=int,
         default=42,
         help="The seed for randomness"
+    )
+    
+    parser.add_argument(
+        "--download",
+        type=bool,
+        default=False,
+        help="Whether to download the dataset"
     )
     
     args = parser.parse_args()

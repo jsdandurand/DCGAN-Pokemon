@@ -72,6 +72,7 @@ class ViTGAN(nn.Module):
         """
         # Get type embeddings
         type_embed = self.class_embedding(labels)
+        type_embed = type_embed.unsqueeze(1)
         # Combine noise and type embedding
         combined_input = noise + type_embed
         return self.generator(combined_input)
@@ -203,6 +204,9 @@ class VisionTransformer(nn.Module):
         """
         batch_size = len(x)
         
+
+        # cls token is None for Discriminator, and passed in for Generator
+        # because Generator needs to pass in the type embedding and noise is already patched
         if cls_token is None:
             # If x is image, convert to patches
             if len(x.shape) == 4:
