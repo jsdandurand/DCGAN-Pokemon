@@ -247,7 +247,7 @@ def train(train_loader, model, optimizer, args, run_name):
             axes = axes.flatten()
             for image_i in range(num_axes):
                 if image_i < num_images:
-                    image = step_info["fake_images"][image_i]
+                    image = denormalize_image(step_info["fake_images"][image_i])
                     label = step_info["labels"][image_i]
                     axes[image_i].set_xticklabels([])
                     axes[image_i].set_yticklabels([])
