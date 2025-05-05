@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
 from tqdm import tqdm
+from PIL import Image
 
 from functools import partial
 from torch import autograd
@@ -31,6 +32,31 @@ def denormalize_image(image):
     Inverse of transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     """
     return (image + 1) / 2
+
+
+def create_image_grid(images, labels, grid_size):
+    """Create a grid of images using PIL"""
+    num_images = len(images)
+    cell_size = images[0].shape[1]  # Assuming square images
+    grid_width = grid_size * cell_size
+    grid_height = grid_size * cell_size
+    
+    # Create a white background image
+    grid_image = Image.new('RGB', (grid_width, grid_height), 'white')
+    
+    for idx in range(min(num_images, grid_size * grid_size)):
+        row = idx // grid_size
+        col = idx % grid_size
+        
+        # Convert numpy array to PIL Image
+        img_data = images[idx]
+        img_data = (img_data.transpose(1, 2, 0) * 255).astype(np.uint8)
+        cell_image = Image.fromarray(img_data)
+        
+        # Paste the image into the grid
+        grid_image.paste(cell_image, (col * cell_size, row * cell_size))
+    
+    return grid_image
 
 
 def train_step_gan(batch, model, optimizer):
@@ -50,19 +76,21 @@ def train_step_gan(batch, model, optimizer):
     all_images = torch.cat((fake_images.detach(), real_images), dim=0)
     preds = model.discriminate(all_images)
 
-    targs = torch.tensor(
-        [0.0, 1.0], device=DEVICE
-    ).tile(batch_size, 1).T.reshape(-1, 1)
+    # Use soft labels and label smoothing for more stable training
+    real_labels = torch.full((batch_size,), 0.9, device=DEVICE)  # 0.9 instead of 1.0
+    fake_labels = torch.full((batch_size,), 0.1, device=DEVICE)  # 0.1 instead of 0.0
+    targs = torch.cat((fake_labels, real_labels)).reshape(-1, 1)
 
     optimizer["discriminator"].zero_grad()
     disc_loss = loss_fn(preds, targs) * 2 # the mean is across 2N samples.
     disc_loss.backward()
     optimizer["discriminator"].step()
 
-    # Update generator
-    preds = model.discriminate(fake_images)
+
+    preds = model.discriminate(fake_images).squeeze(-1)
+    
     optimizer["generator"].zero_grad()
-    gen_loss = loss_fn(preds, targs[batch_size:])
+    gen_loss = loss_fn(preds, real_labels)  # Train generator to target real_labels
     gen_loss.backward()
     optimizer["generator"].step()
 
@@ -141,6 +169,8 @@ def train_step_wgan(batch, model, optimizer, gp):
     gp_loss = compute_gradient_penalty(model, real_images, fake_images.detach(), eps)
     total_loss = disc_loss + gp * gp_loss
     total_loss.backward()
+    # Add gradient clipping for the discriminator
+    torch.nn.utils.clip_grad_norm_(model.discriminator.parameters(), max_norm=1.0)
     optimizer["discriminator"].step()
 
     # Update generator
@@ -148,7 +178,6 @@ def train_step_wgan(batch, model, optimizer, gp):
     optimizer["generator"].zero_grad()
     
     gen_loss = -preds[:batch_size].mean()  # Negate to maximize
-
     gen_loss.backward()
     optimizer["generator"].step()
 
@@ -186,7 +215,13 @@ def train(train_loader, model, optimizer, args, run_name):
     train_step = train_step_gan if gp is None or gp == 0.0 else partial(train_step_wgan, gp=gp)
 
     logs = dict()
-    step_infos = dict()
+    step_infos = {
+        "discriminator_loss": [],
+        "generator_loss": [],
+        "gp_loss": [] if gp else None,
+        "fake_images": None,  # Store only the latest
+        "labels": None,       # Store only the latest
+    }
     
     # Create progress bar
     pbar = tqdm(range(args.num_iterations), desc="Training")
@@ -214,54 +249,48 @@ def train(train_loader, model, optimizer, args, run_name):
             optimizer,
         )
         
-        for k, v in step_info.items():
-            step_infos.setdefault(k, [])
-            step_infos[k].append(v)
+        # Only store scalar values in lists
+        step_infos["discriminator_loss"].append(step_info["discriminator_loss"])
+        step_infos["generator_loss"].append(step_info["generator_loss"])
+        if gp:
+            step_infos["gp_loss"].append(step_info["gp_loss"])
+        
+        # Store only latest images and labels
+        step_infos["fake_images"] = step_info["fake_images"]
+        step_infos["labels"] = step_info["labels"]
 
         # Update progress bar with losses
-        if 'discriminator_loss' in step_info and 'generator_loss' in step_info:
-            pbar.set_postfix({
-                'D_loss': f"{step_info['discriminator_loss']:.4f}",
-                'G_loss': f"{step_info['generator_loss']:.4f}"
-            })
+        pbar.set_postfix({
+            'D_loss': f"{step_info['discriminator_loss']:.4f}",
+            'G_loss': f"{step_info['generator_loss']:.4f}"
+        })
 
         if (iter_i + 1) % LOG_INTERVAL == 0:
-            step_infos = {k: np.mean(v) for k, v in step_infos.items()}
+            # Calculate means only for scalar values
+            step_infos = {
+                k: (np.mean(v) if v is not None and k not in ['fake_images', 'labels'] else v[-1] if v is not None else None) 
+                for k, v in step_infos.items()
+            }
             
             for k, v in step_info.items():
-                if k == "fake_images":
+                if k == "fake_images" or k == "labels":
                     continue
                 logs.setdefault(k, [])
                 logs[k].append(v)
 
             # Save images sampled
             num_images = len(step_info["fake_images"])
-            num_rows = num_cols = math.ceil(math.sqrt(num_images))
-            num_axes = num_rows * num_cols
-            fig, axes = plt.subplots(
-                num_rows,
-                num_cols,
-                figsize=(num_rows * 1.5, num_cols * 1.5),
-                layout="constrained",
-            )
-            axes = axes.flatten()
-            for image_i in range(num_axes):
-                if image_i < num_images:
-                    image = denormalize_image(step_info["fake_images"][image_i])
-                    label = step_info["labels"][image_i]
-                    axes[image_i].set_xticklabels([])
-                    axes[image_i].set_yticklabels([])
-                    axes[image_i].imshow(image.transpose((1, 2, 0)))
-                    axes[image_i].set_title(f'Label: {label}')
-                else:
-                    axes[image_i].axis("off")
-
-            fig.savefig(
-                os.path.join(run_name, "{}.pdf".format(iter_i + 1)),
-                dpi=600,
-            )
-            plt.close(fig)
+            grid_size = math.ceil(math.sqrt(num_images))
             
+            # Create and save image grid
+            grid_image = create_image_grid(
+                step_info["fake_images"],
+                step_info["labels"],
+                grid_size
+            )
+            grid_image.save(os.path.join(run_name, f"{iter_i + 1}.png"))
+            
+            # Save checkpoint
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),
@@ -271,10 +300,16 @@ def train(train_loader, model, optimizer, args, run_name):
                 },
                 os.path.join(run_name, "latest.pt")
             )
-            step_infos = dict()
+            
+            # Clear step_infos
+            step_infos["discriminator_loss"] = []
+            step_infos["generator_loss"] = []
+            if gp:
+                step_infos["gp_loss"] = []
 
         pickle.dump(logs, open(os.path.join(run_name, "logs.pkl"), "wb"))
 
+    # Save final model
     torch.save(
         {
             "model_state_dict": model.state_dict(),

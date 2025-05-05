@@ -307,7 +307,7 @@ class ViTGenerator(nn.Module):
             nn.Linear(embed_dim, self.patch_dim // 2),
             nn.LeakyReLU(0.2),
             nn.Linear(self.patch_dim // 2, self.patch_dim),
-            nn.Tanh()
+            nn.Tanh()  # Ensures output is in [-1, 1] range
         )
 
     def forward(self, z):

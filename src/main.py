@@ -23,7 +23,6 @@ import uuid
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
 from pathlib import Path
 
 from src.train import train
@@ -47,11 +46,15 @@ def main(args):
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 64
     EMBED_DIM = 256
-    IMAGE_SIZE = 64
-    PATCH_SIZE = 8  # 64/8 = 8 patches per side
-    LEARNING_RATE = 2e-4
+    IMAGE_SIZE = 96 # Original image size
+    PATCH_SIZE = 24 # 96/24 = 4 patches per side
+    LEARNING_RATE = 1e-4
     SAVE_DIR = Path(args.save_path)
 
+    # Clear CUDA cache
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        
     # Create save directory
     SAVE_DIR.mkdir(exist_ok=True)
     
@@ -59,7 +62,8 @@ def main(args):
     dataloader = get_pokemon_dataloader(
         batch_size=BATCH_SIZE,
         image_size=IMAGE_SIZE,
-        download=args.download
+        download=args.download,
+        num_workers=2,  # Limit number of workers
     )
     
     # Initialize model
@@ -71,6 +75,11 @@ def main(args):
         discriminator="ViT",
         attention_type="normal"
     ).to(DEVICE)
+
+    # Print model summary
+    print(model)
+    # Print number of parameters
+    print(f"Number of parameters: {sum(p.numel() for p in model.parameters())}")
     
     # Optimizers
     optimizer = {
@@ -165,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--download",
         type=bool,
-        default=False,
+        default=True,
         help="Whether to download the dataset"
     )
     
