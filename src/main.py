@@ -45,9 +45,9 @@ def main(args):
     # Constants
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 64
-    EMBED_DIM = 256
+    EMBED_DIM = 512
     IMAGE_SIZE = 96 # Original image size
-    PATCH_SIZE = 24 # 96/24 = 4 patches per side
+    PATCH_SIZE = 12 # 96/12 = 8 patches per side
     LEARNING_RATE = 1e-4
     SAVE_DIR = Path(args.save_path)
 
