@@ -3,19 +3,33 @@
     "configurations": [
         {
             "name": "Python: ViTGAN Training",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/main.py",
             "args": [
-                "--num_iterations", "40000",
-                "--model", "ViT",
+                "--dataset", "cifar10",
+                "--model", "CNN",
+                "--use_diffaug",
                 "--gradient_penalty", "10",
-                "--save_path", "./logs",
-                "--seed", "42",
-                "--download", "false"
+                "--load_path", "logs/models/cifarpretrain/final.pt"
             ],
             "console": "integratedTerminal",
             "justMyCode": true
+        },
+        {
+            "name": "Train ViT on MNIST",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "args": [
+                "--dataset", "mnist",
+                "--model", "ViT",
+                "--gradient_penalty", "0",
+                "--critic_steps", "1"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}"
         },
         {
             "name": "Python: ViTGAN Load Model",
