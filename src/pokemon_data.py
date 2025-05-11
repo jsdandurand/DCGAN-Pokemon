@@ -55,7 +55,7 @@ class PokemonDataset(Dataset):
             type_idx = TYPE_TO_IDX[primary_type]
             
             for sprite_key in pokemon['sprites']:
-                img_path = self.root_dir / "images" / f"{pokemon['id']}_{sprite_key}.png"
+                img_path = self.root_dir / "processed_images" / f"{pokemon['id']}_{sprite_key}.png"
                 if img_path.exists():
                     try:
                         # Verify image is valid

@@ -18,7 +18,7 @@ class ViTGAN(nn.Module):
         patch_size=8,
         num_classes=18,  # Number of Pokemon types
         discriminator="ViT",
-        attention_type="normal"
+        channels=3,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -34,18 +34,17 @@ class ViTGAN(nn.Module):
         if discriminator == "MLP":
             self.discriminator = MLPDiscriminator(
                 img_size=img_size,
-                in_channels=3  # RGB images
+                in_channels=channels  # RGB images
             )
         elif discriminator == "ViT":
             self.discriminator = ViTDiscriminator(
                 embed_dim,
                 img_size=img_size,
                 patch_size=patch_size,
-                in_channels=3,  # RGB images
-                num_blocks=4,  # Increased for more complex images
-                num_heads=8,
+                in_channels=channels,  # RGB images
+                num_blocks=2,  # Increased for more complex images
+                num_heads=4,
                 widening_factor=4,
-                attention_type=attention_type
             )
         else:
             raise NotImplementedError
@@ -54,11 +53,10 @@ class ViTGAN(nn.Module):
             embed_dim,
             img_size=img_size,
             patch_size=patch_size,
-            out_channels=3,  # RGB images
-            num_blocks=4,  # Increased for more complex images
-            num_heads=8,
+            out_channels=channels,  # RGB images
+            num_blocks=2,  # Increased for more complex images
+            num_heads=4,
             widening_factor=4,
-            attention_type=attention_type
         )
 
     def generate(self, noise, labels):
@@ -70,12 +68,8 @@ class ViTGAN(nn.Module):
         Returns:
             Generated images of shape [batch_size, out_channels, img_size, img_size]
         """
-        # Get type embeddings
-        type_embed = self.class_embedding(labels)
-        type_embed = type_embed.unsqueeze(1)
-        # Combine noise and type embedding
-        combined_input = noise + type_embed
-        return self.generator(combined_input)
+    
+        return self.generator(noise)
 
     def discriminate(self, x):
         return self.discriminator(x)
@@ -89,22 +83,16 @@ class TransformerEncoder(nn.Module):
     Transformer architecture that follows GPT-2 (Radford et al., 2019).
     Here, we only consider the encoder architecture where there is no causal masking.
     """
-    def __init__(self, embed_dim, num_heads, widening_factor=4, attention_type="normal"):
+    def __init__(self, embed_dim, num_heads, widening_factor=4):
         super().__init__()
         self.ln_1 = nn.LayerNorm(embed_dim)
-        self.attention_type = attention_type
         
-        if attention_type == "normal":
-            self.attention = nn.MultiheadAttention(
-                embed_dim,
-                num_heads,
-                dropout=0.0,
-                batch_first=True,
-            )
-        elif attention_type == "spatial":
-            self.attention = SpatialAttention(embed_dim)
-        else:
-            raise ValueError(f"Unknown attention type: {attention_type}")
+        self.attention = nn.MultiheadAttention(
+            embed_dim,
+            num_heads,
+            dropout=0.0,
+            batch_first=True,
+        )
             
         self.ln_2 = nn.LayerNorm(embed_dim)
         self.mlp_1 = nn.Linear(embed_dim, embed_dim * widening_factor)
@@ -121,16 +109,7 @@ class TransformerEncoder(nn.Module):
         init = x
         x = self.ln_1(x)
         
-        if self.attention_type == "normal":
-            x = self.attention(x, x, x)[0]
-        else:  # spatial attention
-            # Reshape for spatial attention
-            B, N, C = x.shape
-            H = W = int(np.sqrt(N))
-            x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)  # B, C, H, W
-            x = self.attention(x)
-            x = x.permute(0, 2, 3, 1).reshape(B, N, C)  # Back to B, N, C
-            
+        x = self.attention(x, x, x)[0]
         x = x + init
         init = x
         x = self.ln_2(x)
@@ -151,7 +130,6 @@ class VisionTransformer(nn.Module):
         num_blocks,
         num_heads,
         widening_factor=4,
-        attention_type="normal"
     ):
         super().__init__()
         self.img_size = img_size
@@ -175,26 +153,20 @@ class VisionTransformer(nn.Module):
         
         # Transformer blocks
         self.transformer_blocks = nn.Sequential(*[
-            TransformerEncoder(embed_dim, num_heads, widening_factor, attention_type)
+            TransformerEncoder(embed_dim, num_heads, widening_factor)
             for _ in range(num_blocks)
         ])
 
     def patchify(self, x):
         """
-        Converts a batch of images into a batch of patches.
-        Input: (batch_size, channels, height, width)
-        Output: (batch_size, num_patches, patch_dim)
+        Converts a batch of images into a batch of image patches.
         """
         B, C, H, W = x.shape
-        assert H == W == self.img_size, f"Input image size ({H}x{W}) doesn't match expected size ({self.img_size}x{self.img_size})"
-        
-        # Reshape into patches
         x = x.reshape(B, C, H // self.patch_size, self.patch_size, W // self.patch_size, self.patch_size)
-        x = x.permute(0, 2, 4, 1, 3, 5)  # [B, H', W', C, p, p]
-        x = x.flatten(1, 2)  # [B, num_patches, C, p, p]
-        x = x.reshape(B, self.num_patches, -1)  # [B, num_patches, C*p*p]
-        
+        x = x.permute(0, 2, 4, 1, 3, 5)
+        x = x.flatten(1, 2)
         return x
+
 
     def forward(self, x, cls_token=None):
         """
@@ -211,6 +183,7 @@ class VisionTransformer(nn.Module):
             # If x is image, convert to patches
             if len(x.shape) == 4:
                 x = self.patchify(x)
+                x = x.flatten(2, 4)                
                 x = self.linear_proj(x)
             cls_token = self.cls_token.expand(batch_size, -1, -1)
             
@@ -236,7 +209,6 @@ class ViTDiscriminator(nn.Module):
         num_blocks=4,
         num_heads=8,
         widening_factor=4,
-        attention_type="normal"
     ):
         super().__init__()
         self.vit = VisionTransformer(
@@ -247,7 +219,6 @@ class ViTDiscriminator(nn.Module):
             num_blocks=num_blocks,
             num_heads=num_heads,
             widening_factor=widening_factor,
-            attention_type=attention_type
         )
         self.output_proj = nn.Linear(embed_dim, 1)
 
@@ -271,7 +242,6 @@ class ViTGenerator(nn.Module):
         num_blocks=4,
         num_heads=8,
         widening_factor=4,
-        attention_type="normal"
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -285,9 +255,7 @@ class ViTGenerator(nn.Module):
         
         # Project input noise to initial embeddings
         self.noise_embed = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 2),
-            nn.LeakyReLU(0.2),
-            nn.Linear(embed_dim * 2, embed_dim)
+            nn.Linear(embed_dim, embed_dim)
         )
         
         # Vision Transformer for processing
@@ -299,15 +267,19 @@ class ViTGenerator(nn.Module):
             num_blocks=num_blocks,
             num_heads=num_heads,
             widening_factor=widening_factor,
-            attention_type=attention_type
         )
         
         # Progressive output projection
         self.out = nn.Sequential(
-            nn.Linear(embed_dim, self.patch_dim // 2),
-            nn.LeakyReLU(0.2),
-            nn.Linear(self.patch_dim // 2, self.patch_dim),
-            nn.Tanh()  # Ensures output is in [-1, 1] range
+            nn.Linear(
+                in_features=embed_dim,
+                out_features=(self.out_channels * self.patch_size ** 2) // 2,
+            ),
+            nn.LeakyReLU(),
+            nn.Linear(
+                in_features=(self.out_channels * self.patch_size ** 2) // 2,
+                out_features=self.out_channels * self.patch_size ** 2,
+            ),
         )
 
     def forward(self, z):
@@ -331,64 +303,17 @@ class ViTGenerator(nn.Module):
             batch_size,
             self.img_size // self.patch_size,  # H patches
             self.img_size // self.patch_size,  # W patches
+            self.out_channels,                  # channels
             self.patch_size,                   # patch height
             self.patch_size,                   # patch width
-            self.out_channels                  # channels
+
         )
         
         # Rearrange dimensions to standard image format
-        images = images.permute(0, 5, 1, 3, 2, 4).contiguous()
-        images = images.view(batch_size, self.out_channels, self.img_size, self.img_size)
+        images = images.permute(0, 3, 1, 4, 2, 5)
+        images = images.reshape(batch_size, self.out_channels, self.img_size, self.img_size)
         
+        images = nn.functional.tanh(images)
         return images
 
 
-def interpolate_digits(model, start_digit, end_digit, steps=10):
-    """Generate smooth transition between two digits."""
-    # Create start and end labels
-    start_label = torch.tensor([start_digit]).to(DEVICE)
-    end_label = torch.tensor([end_digit]).to(DEVICE)
-    
-    # Generate fixed noise
-    z = model.sample_noise(1).to(DEVICE)
-    
-    # Get embeddings
-    start_embed = model.class_embedding(start_label)
-    end_embed = model.class_embedding(end_label)
-    
-    images = []
-    # Interpolate between embeddings
-    for alpha in np.linspace(0, 1, steps):
-        # Interpolate embeddings
-        curr_embed = start_embed * (1 - alpha) + end_embed * alpha
-        
-        # Add to noise
-        curr_z = z.clone()
-        curr_z[:, 0, :] += curr_embed
-        
-        # Generate image
-        with torch.no_grad():
-            img = model.generate(curr_z)
-            images.append(img)
-    
-    return torch.cat(images, dim=0)
-
-
-class SpatialAttention(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-        self.query = nn.Conv2d(channels, channels//8, 1)
-        self.key = nn.Conv2d(channels, channels//8, 1)
-        self.value = nn.Conv2d(channels, channels, 1)
-        
-    def forward(self, x):
-        b, c, h, w = x.shape
-        q = self.query(x).view(b, -1, h*w) # B, C/8, H*W (H*W = Number of patches)
-        k = self.key(x).view(b, -1, h*w)
-        v = self.value(x).view(b, -1, h*w)
-        
-        attention = torch.bmm(q.transpose(1,2), k)
-        attention = F.softmax(attention, dim=-1)
-        
-        out = torch.bmm(v, attention.transpose(1,2))
-        return out.view(b, c, h, w)
