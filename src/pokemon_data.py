@@ -24,7 +24,9 @@ POKEMON_TYPES = [
 TYPE_TO_IDX = {t: i for i, t in enumerate(POKEMON_TYPES)}
 NUM_TYPES = len(POKEMON_TYPES)
 
-SPRITE_KEYS = ['front_default', 'front_shiny', 'back_default', 'back_shiny']
+# Define sprite keys including official artwork
+SPRITE_KEYS = ['front_default', 'front_shiny']
+OFFICIAL_ART_KEY = 'other.official-artwork.front_default'
 
 class PokemonDataset(Dataset):
     def __init__(self, root_dir="data/pokemon", image_size=64, download=True):
@@ -54,6 +56,7 @@ class PokemonDataset(Dataset):
             primary_type = pokemon['type'][0].lower()
             type_idx = TYPE_TO_IDX[primary_type]
             
+            # Check both regular sprites and official artwork
             for sprite_key in pokemon['sprites']:
                 img_path = self.root_dir / "processed_images" / f"{pokemon['id']}_{sprite_key}.png"
                 if img_path.exists():
@@ -122,6 +125,11 @@ class PokemonDataset(Dataset):
                         if sprite_url:
                             sprites_data[sprite_key] = sprite_url
                     
+                    # Get official artwork if available
+                    official_art_url = data['sprites'].get('other', {}).get('official-artwork', {}).get('front_default')
+                    if official_art_url:
+                        sprites_data[OFFICIAL_ART_KEY] = official_art_url
+                    
                     if sprites_data:  # Only add if we have at least one sprite
                         pokemon_info = {
                             'id': data['id'],
@@ -134,7 +142,13 @@ class PokemonDataset(Dataset):
                         for sprite_key, sprite_url in sprites_data.items():
                             sprite_response = requests.get(sprite_url)
                             if sprite_response.status_code == 200:
-                                img_path = self.root_dir / "images" / f"{data['id']}_{sprite_key}.png"
+                                # Create filename based on sprite key
+                                if sprite_key == OFFICIAL_ART_KEY:
+                                    filename = f"{data['id']}_official_art.png"
+                                else:
+                                    filename = f"{data['id']}_{sprite_key}.png"
+                                    
+                                img_path = self.root_dir / "images" / filename
                                 # Save directly as RGB
                                 img_data = Image.open(BytesIO(sprite_response.content)).convert('RGB')
                                 img_data.save(img_path)

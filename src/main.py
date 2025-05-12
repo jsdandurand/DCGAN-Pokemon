@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.optim as optim
 from pathlib import Path
 
-from src.train import train, train_curriculum, train_stochastic_curriculum
+from src.train import train
 from vit import ViTGAN
 from cnn import CNNGAN
 from cnncifar import CifarCNNGAN
@@ -53,7 +53,7 @@ def get_cifar10_dataloader(batch_size, image_size, num_workers=2):
         shuffle=True,
         num_workers=num_workers,
         # pin_memory=True,
-        # drop_last=True
+        drop_last=True
     )
     
     return dataloader
@@ -105,6 +105,8 @@ def get_mnist_dataloader(batch_size, image_size, num_workers=2):
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        drop_last=True
+        
     )
     
     return dataloader
@@ -125,26 +127,33 @@ def main(args):
 
     # Constants
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 128  # Reduced batch size for better stability
-    EMBED_DIM = 64  # Reduced embedding dimension for CIFAR-10
+
     if args.dataset == "pokemon":
+        BATCH_SIZE = 8
         IMAGE_SIZE = 96
-        PATCH_SIZE = 8
+        PATCH_SIZE = 24
         CHANNELS = 3
+        EMBED_DIM = 128
     elif args.dataset == "mnist":
+        BATCH_SIZE = 64
         IMAGE_SIZE = 28
         PATCH_SIZE = 7
         CHANNELS = 1
+        EMBED_DIM = 64
     elif args.dataset == "cifar10":
+        BATCH_SIZE = 64
         IMAGE_SIZE = 32
-        PATCH_SIZE = 4
-        CHANNELS = 3
-    elif args.dataset == "celeba":
-        IMAGE_SIZE = 64
         PATCH_SIZE = 8
         CHANNELS = 3
-    D_LEARNING_RATE = 2e-4  # Reduced learning rate
-    G_LEARNING_RATE = 2e-4 # Reduced learning rate
+        EMBED_DIM = 256
+    elif args.dataset == "celeba":
+        BATCH_SIZE = 128
+        IMAGE_SIZE = 96
+        PATCH_SIZE = 16
+        CHANNELS = 3
+        EMBED_DIM = 256
+    D_LEARNING_RATE = 5e-5  # Reduced from 5e-4 to make discriminator less aggressive
+    G_LEARNING_RATE = 5e-5  # Increased from 2e-4 to help generator catch up
     NUM_CLASSES = NUM_TYPES if args.dataset == "pokemon" else 10  # CIFAR-10 has 10 classes
     SAVE_DIR = Path(args.save_path)
 
@@ -192,10 +201,10 @@ def main(args):
     #     ).to(DEVICE)
     if args.model == "CNN":
         model = CNNGAN(
-            latent_dim=100,
+            latent_dim=50 if args.dataset == "pokemon" else 100,
             num_classes=NUM_CLASSES,
-            channels=3,
-            img_size=IMAGE_SIZE
+            channels=CHANNELS,
+            img_size=IMAGE_SIZE,
         ).to(DEVICE)
     # elif args.model == "Hybrid":
     #     model = HybridGAN(
@@ -204,7 +213,7 @@ def main(args):
     #         channels=3,
     #         img_size=IMAGE_SIZE
     #     ).to(DEVICE)
-    else:  # ViT models
+    elif args.model == "ViT":
         model = ViTGAN(
             embed_dim=EMBED_DIM,
             #latent_dim=1024,
@@ -214,15 +223,37 @@ def main(args):
             discriminator="ViT",
             channels=CHANNELS,
         ).to(DEVICE)
+    elif args.model == "ViT:CNN":
+        model = ViTGAN(
+            embed_dim=EMBED_DIM,
+            #latent_dim=1024,
+            img_size=IMAGE_SIZE,
+            patch_size=PATCH_SIZE,
+            discriminator="CNN",
+            channels=CHANNELS,
+        ).to(DEVICE)
 
     if args.load_path and os.path.isfile(args.load_path):
         if args.model == "CNN":
             checkpoint = torch.load(args.load_path, weights_only=True)
             
-            pretrained_model = CNNGAN(latent_dim=100, num_classes=NUM_CLASSES, channels=3, img_size=32)
+            pretrained_model = CNNGAN(latent_dim=100, num_classes=NUM_CLASSES, channels=3, img_size=IMAGE_SIZE)
             pretrained_model.load_state_dict(checkpoint["model_state_dict"])
             model = transfer_weights(pretrained_model, model)
             print("Transferred weights from {}".format(args.load_path))
+            
+            # Use layer-specific learning rates for fine-tuning
+            if args.dataset == "pokemon":
+                print("Using layer-specific learning rates for fine-tuning")
+                generator_params = get_layer_specific_params(
+                    model,
+                    transferred_lr=1e-5,  # Lower learning rate for transferred layers
+                    new_lr=1e-4  # Higher learning rate for new layers
+                )
+                optimizer = {
+                    "generator": optim.Adam(generator_params, betas=(0.5, 0.999)),
+                    "discriminator": optim.Adam(model.discriminator.parameters(), lr=D_LEARNING_RATE, betas=(0.5, 0.999))
+                }
         else:
             print("Loading parameters from {}".format(args.load_path))
             checkpoint = torch.load(args.load_path, weights_only=True)
@@ -287,15 +318,9 @@ def main(args):
         default=lambda s: vars(s),
     )
 
-    if args.curriculum and args.dataset == "pokemon":
-        print("Using curriculum learning...")
-        train_curriculum(dataloader, model, optimizer, args, run_name)
-    elif args.stochastic_curriculum and args.dataset == "pokemon":
-        print("Using stochastic curriculum learning...")
-        train_stochastic_curriculum(dataloader, model, optimizer, args, run_name)
-    else:
-        print("Using standard training...")
-        train(dataloader, model, optimizer, args, run_name)
+
+    print("Using standard training...")
+    train(dataloader, model, optimizer, args, run_name)
 
 
 if __name__ == "__main__":
@@ -309,15 +334,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--num_iterations",
+        "--num_epochs",
         type=int,
-        default=100000,
-        help="Number of times the data is iterated on"
+        default=100,
+        help="Number of epochs to train for"
     )
 
     parser.add_argument(
         "--model",
-        choices=["MLP", "ViT", "ViT:MLP", "CNN", "Hybrid"],
+        choices=["MLP", "ViT", "ViT:MLP", "CNN", "ViT:CNN"],
         default="ViT",
         help="The model to use"
     )
@@ -358,32 +383,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--curriculum",
-        action="store_true",
-        help="Whether to use curriculum learning (train one type at a time)"
-    )
-
-    parser.add_argument(
-        "--epochs_per_type",
-        type=int,
-        default=5,
-        help="Number of epochs to train on each type when using curriculum learning"
-    )
-
-    parser.add_argument(
-        "--iterations_per_type",
-        type=int,
-        default=1000,
-        help="Number of iterations to train on each type before switching (for stochastic curriculum)"
-    )
-
-    parser.add_argument(
-        "--stochastic_curriculum",
-        action="store_true",
-        help="Whether to use stochastic curriculum learning (randomly pick types)"
-    )
-
-    parser.add_argument(
         "--use_diffaug",
         action="store_true",
         help="Whether to use differentiable augmentation during training"
@@ -400,6 +399,13 @@ if __name__ == "__main__":
         "--feature_matching",
         action="store_true",
         help="Use feature matching loss for generator"
+    )
+
+    parser.add_argument(
+        "--log_every",
+        type=int,
+        default=1,
+        help="Log and save images every k epochs"
     )
 
     args = parser.parse_args()

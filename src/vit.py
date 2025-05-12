@@ -31,10 +31,10 @@ class ViTGAN(nn.Module):
         self.num_classes = num_classes
         self.class_embedding = nn.Embedding(num_classes, embed_dim)
 
-        if discriminator == "MLP":
-            self.discriminator = MLPDiscriminator(
+        if discriminator == "CNN":
+            self.discriminator = CNNDiscriminator(
+                channels=channels,
                 img_size=img_size,
-                in_channels=channels  # RGB images
             )
         elif discriminator == "ViT":
             self.discriminator = ViTDiscriminator(
@@ -42,8 +42,8 @@ class ViTGAN(nn.Module):
                 img_size=img_size,
                 patch_size=patch_size,
                 in_channels=channels,  # RGB images
-                num_blocks=2,  # Increased for more complex images
-                num_heads=4,
+                num_blocks=3,  # Increased for more complex images
+                num_heads=8,
                 widening_factor=4,
             )
         else:
@@ -54,8 +54,8 @@ class ViTGAN(nn.Module):
             img_size=img_size,
             patch_size=patch_size,
             out_channels=channels,  # RGB images
-            num_blocks=2,  # Increased for more complex images
-            num_heads=4,
+            num_blocks=3,  # Increased for more complex images
+            num_heads=8,
             widening_factor=4,
         )
 
@@ -282,6 +282,8 @@ class ViTGenerator(nn.Module):
             ),
         )
 
+            
+
     def forward(self, z):
         """
         Generates images from noise vectors
@@ -316,4 +318,229 @@ class ViTGenerator(nn.Module):
         images = nn.functional.tanh(images)
         return images
 
+
+class CNNDiscriminator(nn.Module):
+    def __init__(self, channels=3, ndf=64, img_size=32):
+        super(CNNDiscriminator, self).__init__()
+        self.img_size = img_size
+        self.ndf = ndf
+        
+        # Calculate number of downsampling layers needed
+        # For 32x32: need 3 downsampling layers (32->16->8->4)
+        # For 96x96: need 4 downsampling layers (96->48->24->12)
+        self.num_downsamples = int(np.log2(img_size / (img_size // 16)))
+        
+        # Channel dimensions that will be shared between architectures
+        self.channels = [
+            channels,   # First layer
+            ndf * 1,    # Second layer
+            ndf * 2,    # Third layer
+            ndf * 4,    # Fourth layer
+            ndf * 8,    # Fifth layer
+            ndf * 16,    # Sixth layer
+        ]
+
+        # Initial layers
+        self.initial = nn.Sequential(
+            nn.Conv2d(channels, self.channels[1], 3, 1, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True)
+        )
+
+        # Downsampling layers
+        self.downsampling_layers = nn.ModuleList()
+        for i in range(self.num_downsamples):
+            in_ch = self.channels[i+1]
+            out_ch = self.channels[i+2]
+            self.downsampling_layers.append(nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.LeakyReLU(0.1, inplace=True)
+            ))
+
+        # Calculate final feature map size
+        self.final_size = img_size // (2 ** self.num_downsamples)
+        self.final_channels = self.channels[-1]
+        
+        # # Final layers
+        # self.final = nn.Sequential(
+        #     nn.Conv2d(self.final_channels, self.final_channels, 3, 1, 1, bias=False),
+        #     nn.BatchNorm2d(self.final_channels),
+        #     nn.LeakyReLU(0.1, inplace=True)
+        # )
+        
+        # Calculate flattened size dynamically
+        self.flattened_size = self.final_channels * self.final_size * self.final_size
+        
+        # MLP layers
+        self.mlp = nn.Sequential(
+            nn.Linear(self.flattened_size, 128),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.3),
+            nn.Linear(128, 1),
+        )
+
+    def forward(self, input):
+        x = self.initial(input)
+        for layer in self.downsampling_layers:
+            x = layer(x)
+        #x = self.final(x)
+        x = x.view(-1, self.flattened_size)
+        x = self.mlp(x)
+        return x.view(-1, 1)
+
+    def get_features(self, input):
+        x = self.initial(input)
+        for layer in self.downsampling_layers:
+            x = layer(x)
+        x = x.view(-1, self.flattened_size)
+        return x
+
+
+class ViTAEGAN(nn.Module):
+    def __init__(
+        self,
+        latent_dim=100,
+        num_classes=10,
+        image_size=64,
+        patch_size=16,
+        embed_dim=256,
+        channels=3,
+    ):
+        super().__init__()
+        
+        self.latent_dim = latent_dim
+        self.num_classes = num_classes
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
+        self.channels = channels
+        
+        # Calculate number of patches
+        self.num_patches = (image_size // patch_size) ** 2
+        
+        # Initialize encoder
+        self.encoder = ViTEncoder(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=channels,
+            embed_dim=embed_dim,
+            latent_dim=latent_dim
+        )
+        
+        # Initialize generator
+        self.generator = ViTGenerator(
+            latent_dim=latent_dim,
+            num_classes=num_classes,
+            image_size=image_size,
+            patch_size=patch_size,
+            embed_dim=embed_dim,
+            channels=channels
+        )
+        
+        # Initialize discriminator
+        self.discriminator = ViTDiscriminator(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=channels,
+            embed_dim=embed_dim
+        )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
+    
+    def sample_noise(self, batch_size):
+        return torch.randn(batch_size, self.latent_dim)
+    
+    def encode(self, x):
+        return self.encoder(x)
+    
+    def decode(self, z, labels):
+        return self.generator(z, labels)
+    
+    def generate(self, z, labels):
+        return self.generator(z, labels)
+    
+    def discriminate(self, x):
+        return self.discriminator(x)
+    
+    def reconstruct(self, x, labels):
+        z = self.encode(x)
+        return self.decode(z, labels)
+
+class ViTEncoder(nn.Module):
+    def __init__(
+        self,
+        image_size=64,
+        patch_size=16,
+        in_channels=3,
+        embed_dim=256,
+        latent_dim=100,
+        depth=6,
+        num_heads=8,
+        mlp_ratio=4.0,
+        dropout=0.0
+    ):
+        super().__init__()
+        
+        # Patch embedding
+        self.patch_embed = PatchEmbed(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=embed_dim
+        )
+        
+        # Position embedding
+        num_patches = (image_size // patch_size) ** 2
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+        
+        # Transformer blocks
+        self.blocks = nn.Sequential(*[
+            TransformerBlock(
+                dim=embed_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                dropout=dropout
+            )
+            for _ in range(depth)
+        ])
+        
+        # Final layer norm
+        self.norm = nn.LayerNorm(embed_dim)
+        
+        # Project to latent space
+        self.proj = nn.Linear(embed_dim, latent_dim)
+        
+        # Initialize weights
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+    
+    def forward(self, x):
+        # Patch embedding
+        x = self.patch_embed(x)
+        
+        # Add position embedding
+        x = x + self.pos_embed
+        
+        # Transformer blocks
+        x = self.blocks(x)
+        
+        # Final layer norm
+        x = self.norm(x)
+        
+        # Global average pooling
+        x = x.mean(dim=1)
+        
+        # Project to latent space
+        x = self.proj(x)
+        
+        return x
 
