@@ -1,6 +1,6 @@
 # DCGAN for Pokemon(ish) Generation
 
-A Deep Convolutional GAN implementation for generating Pokémon images, with a focus on training stability and high-quality generation.
+A Deep Convolutional GAN implementation for generating Pokémon images, with a focus on training stability and high-quality generation. Results are somewhat disturbing but if you squint and back away from your screen it looks alright.
 
 ## Training Stability Challenges and Solutions
 
@@ -32,7 +32,7 @@ Training GANs is notoriously difficult, and this project faced several unique ch
 
 ## Model Architecture
 
-The successful model uses a CNN-based architecture with careful design choices:
+The most successful model uses a CNN-based architecture with careful design choices:
 
 ### Generator
 ```python
@@ -99,7 +99,7 @@ To demonstrate the model's capabilities on a larger dataset, we also trained it 
 
 ![CIFAR-10 Training Progress](results/cifar10pretrain/fixed_noise_progress.gif)
 
-The CIFAR-10 results show that the architecture is capable of generating high-quality images when trained on a sufficiently large dataset. This suggests that the challenges we face with the Pokémon dataset are primarily due to its small size rather than architectural limitations.
+The CIFAR-10 results show that the architecture is capable of generating high-quality images when trained on a sufficiently large dataset. This suggests that the challenges we face with the Pokémon dataset are primarily due to its small size rather than architectural limitations. 
 
 ## Training Techniques
 
