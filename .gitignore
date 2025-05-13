@@ -1,2 +1,24 @@
-./data
-./logs
+# Data and logs
+data/
+logs/
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Generated images and results
+results/*
+!results/README_images/
+results/README_images/*
+!results/README_images/*.png
+!results/README_images/*.gif
+
+# Dataset files
+*.h5
+*.npy
+*.npz
+
+# Python cache
+__pycache__/
+*.pyc

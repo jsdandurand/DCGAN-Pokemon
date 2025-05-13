@@ -1,1 +1,0 @@
-{"dataset": "pokemon", "num_epochs": 1000, "model": "CNN", "gradient_penalty": 0.0, "save_path": "./logs", "load_path": null, "seed": 42, "download": true, "use_diffaug": true, "critic_steps": 3, "feature_matching": true, "log_every": 10}

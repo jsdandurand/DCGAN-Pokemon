@@ -27,7 +27,7 @@ class Generator(nn.Module):
         
         # Channel dimensions that will be shared between architectures
         self.channels = [
-            ngf * 8,  # First layer
+            ngf * 16,  # First layer
             ngf * 8,   # Second layer
             ngf * 4,   # Third layer
             ngf * 2,   # Fourth layer

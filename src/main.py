@@ -147,13 +147,13 @@ def main(args):
         CHANNELS = 3
         EMBED_DIM = 256
     elif args.dataset == "celeba":
-        BATCH_SIZE = 128
+        BATCH_SIZE = 64
         IMAGE_SIZE = 96
         PATCH_SIZE = 16
         CHANNELS = 3
         EMBED_DIM = 256
-    D_LEARNING_RATE = 5e-5  # Reduced from 5e-4 to make discriminator less aggressive
-    G_LEARNING_RATE = 5e-5  # Increased from 2e-4 to help generator catch up
+    D_LEARNING_RATE = 2e-4  # Reduced from 5e-4 to make discriminator less aggressive
+    G_LEARNING_RATE = 1e-4  # Increased from 2e-4 to help generator catch up
     NUM_CLASSES = NUM_TYPES if args.dataset == "pokemon" else 10  # CIFAR-10 has 10 classes
     SAVE_DIR = Path(args.save_path)
 

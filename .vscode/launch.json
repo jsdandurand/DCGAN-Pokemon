@@ -46,6 +46,12 @@
             ],
             "console": "integratedTerminal",
             "justMyCode": true
+        },
+        {
+            "name": "Download Pokemon Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/pokemon_data.py",
         }
     ],
     "inputs": [
